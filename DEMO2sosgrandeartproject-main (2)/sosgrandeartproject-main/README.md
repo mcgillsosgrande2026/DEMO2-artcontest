@@ -1,97 +1,169 @@
+```markdown
 # Waves of Change — SOS Grande contest app
 
-A student registration/submission portal + organizer admin dashboard for the
-"Waves of Change" mural contest, available in English and Spanish.
+A bilingual (English/Spanish) web app for running SOS Grande's "Waves of
+Change" mural art contest for high school students in Playa Grande, Costa
+Rica. It has two halves:
 
-## What changed from the original artifact
+- **Student portal** — where students read the contest guidelines, register,
+  and submit their artwork.
+- **Organizer (admin) dashboard** — where SOS Grande staff review
+  submissions, manage registrations, edit all the contest copy, control
+  whether the contest is open, and export data — all without touching code.
 
-The original file used `window.storage`, which only works inside a Claude.ai
-artifact preview. This version is a real deployable app:
+It's a single-page React app (Vite) with a small serverless backend
+(Netlify Functions + Netlify Blobs for storage), designed to be run and
+maintained by non-technical staff after handoff.
 
-- **Storage** — `window.storage` calls are replaced with Netlify Functions
-  (`netlify/functions/data.js`, `upload.js`, `download.js`, `wipe.js`) backed
-  by **Netlify Blobs**, Netlify's built-in key-value/file store. No external
-  database needed.
-- **File uploads** — previously only the filename/size was recorded. Now the
-  actual artwork image is uploaded and stored, and organizers can click
-  "Download artwork" in the admin panel to get the real file, or view an
-  inline preview without leaving the dashboard.
-- **Language toggle** — an EN/ES switch appears in the top nav on both the
-  student portal and admin panel. All interface text and all
-  admin-editable contest content (name, dates, rules, prize copy, etc.) are
-  fully translatable. Content is stored as `{ en: {...}, es: {...} }`, and
-  the content editor has its own EN/ES tab so organizers can edit either
-  language regardless of which language they're currently viewing the site
-  in.
+---
 
-## Added on top of that
-
-- **Wipe test data** — a "Settings" tab in the organizer dashboard lets you
-  permanently delete all submissions and registrations (and their uploaded
-  artwork files) in one click, so you can clear out test entries before the
-  real contest opens. It requires the admin password plus typing `DELETE`
-  to confirm, and never touches the contest content/settings.
-- **CSV export** — "Export CSV" buttons on the Submissions and Registrations
-  tabs let a non-technical organizer download the current (filtered) list
-  and open it straight in Excel or Google Sheets.
-- **Inline artwork preview** — expanding a submission in the admin panel now
-  shows the artwork image directly, not just a download link.
-- **Student session persistence** — a student's registration is now
-  remembered on their device (via `localStorage`), so refreshing the page or
-  coming back later doesn't lose their spot and force a duplicate
-  registration. The nav bar shows who's signed in with a "Not you?" reset
-  link.
-- **Duplicate protection** — registering twice with the same email reuses
-  the existing registration instead of creating a second one, and a
-  "Already registered on another device?" lookup lets a student find their
-  registration by email if their session was lost (e.g. different device
-  or cleared browser data). Submitting artwork twice for the same
-  registration is blocked with a friendly "already submitted" message.
-
-## Project structure
+## How it's organized
 
 ```
 ├── src/
-│   ├── App.jsx           # the whole app (student portal + admin panel)
-│   ├── i18n.js            # English/Spanish UI text + default content
-│   ├── LangContext.jsx    # language state, persisted to localStorage
-│   ├── api.js             # client helpers that call the Netlify Functions
-│   └── main.jsx
+│   ├── App.jsx           # the entire UI: student portal + admin panel
+│   ├── i18n.js            # all interface text (EN/ES) + default contest content
+│   ├── LangContext.jsx    # current-language state, persisted to localStorage
+│   ├── api.js             # client-side helpers that call the Netlify Functions
+│   └── main.jsx           # React entry point
 ├── netlify/functions/
-│   ├── data.js             # GET/SET for content, registrations, submissions
-│   ├── upload.js           # stores an uploaded artwork file
-│   ├── download.js         # streams an artwork file back for download
-│   └── wipe.js              # deletes all submissions/registrations + artwork
-├── netlify.toml
+│   ├── data.js               # generic get/set for JSON data (content, registrations, submissions)
+│   ├── upload.js              # stores an uploaded artwork image
+│   ├── download.js            # streams a stored artwork image back
+│   ├── delete-submission.js   # deletes one submission (+ its artwork), password-protected
+│   └── wipe.js                 # deletes ALL submissions & registrations, password-protected
+├── netlify.toml            # build config + SPA redirect rule
 └── package.json
 ```
 
-## Deploying to Netlify
+Everything the student and admin see lives in `App.jsx`. It's one large file
+organized top-to-bottom as: shared UI primitives → student portal →
+admin login → admin panel (submissions / registrations / content editor /
+settings) → root component that ties it together. Look for the `═══` banner
+comments to jump between sections.
 
-**Option A — drag & drop (fastest, no git needed)**
-1. Run `npm install` then `npm run build` locally (or ask me to hand you the
-   built files).
-2. Go to [app.netlify.com/drop](https://app.netlify.com/drop) and drag the
-   whole project **folder** in — Netlify needs the source + `netlify.toml`
-   to build the functions, not just the `dist` folder.
+---
 
-**Option B — connect a Git repo (recommended, gets you auto-deploys)**
-1. Push this folder to a new GitHub (or GitLab/Bitbucket) repository.
-2. In Netlify: **Add new site → Import an existing project**, pick the repo.
-3. Netlify will read `netlify.toml` automatically:
-   - Build command: `npm run build`
-   - Publish directory: `dist`
-   - Functions directory: `netlify/functions`
-4. Click **Deploy**. No environment variables or extra setup are required —
-   Netlify Blobs works automatically on any Netlify site with functions.
+## Data model
 
-**Option C — Netlify CLI**
-```bash
-npm install -g netlify-cli
-netlify login
-netlify init      # links this folder to a new or existing Netlify site
-netlify deploy --prod
-```
+There's no traditional database — everything is stored as JSON under a few
+keys in **Netlify Blobs** (via `netlify/functions/data.js`), plus a separate
+blob store for the actual artwork image files.
+
+| Key | Shape | What it is |
+|---|---|---|
+| `woc_content` | `{ en: {...}, es: {...} }` | All editable contest copy (name, dates, rules, prize text, etc.), one object per language. Defaults live in `i18n.js` as `DEFAULT_CONTENT`. |
+| `woc_registrations` | `[{ id, firstname, lastname, email, school, grade, teammates, registeredAt, hasSubmitted }]` | One entry per student who's signed up. |
+| `woc_submissions` | `[{ id, regId, ...student info, statement, filename, artworkKey, status, submittedAt }]` | One entry per submitted artwork. `status` is one of `new / reviewed / shortlisted / rejected`. `artworkKey` points into the artwork blob store. |
+| `woc_contest_status` | `{ status: "open" \| "not_open" \| "closed", closedMessage: { en, es } }` | Whether students can currently register, and the message shown to them if not. Defaults live in `i18n.js` as `DEFAULT_STATUS`. |
+
+Artwork image files are stored separately in a `sosgrande-artwork` Blob
+store, keyed by an opaque string (`artworkKey`) generated at upload time.
+`download.js` streams a file back given that key; `delete-submission.js` and
+`wipe.js` clean the file up when a submission is removed.
+
+The client never talks to Netlify Blobs directly — everything goes through
+`src/api.js`, which wraps `fetch()` calls to the functions above (`sGet` /
+`sSet` for JSON data, `uploadArtwork` / `downloadUrl` for files).
+
+---
+
+## Student portal
+
+Three pages, navigated via local component state (`page`) in `StudentPortal`
+— there's no router, since it's a small linear flow:
+
+1. **Contest info (`home`)** — hero, key dates, prize, theme, eligibility,
+   and artwork requirements, all pulled from the editable content object.
+   The status badge at the top reflects the current contest status.
+2. **Sign up (`register`)** — collects name, email, school, grade, and
+   optional teammates. Registering with an email that's already on file
+   reuses the existing registration instead of duplicating it. A "find me"
+   lookup lets a student who registered on a different device retrieve
+   their registration by email.
+3. **Submit (`submit`)** — artist statement (100–200 words, validated live),
+   artwork file upload, and two consent checkboxes. Requires an active
+   registration; blocks a second submission per registration with a
+   friendly "already submitted" message instead of a hard error.
+
+**Contest status gating:** every entry point that leads to the registration
+page (nav tab, hero button, bottom-of-page CTA, and the "sign up first"
+prompt on the submit page) routes through a single `goToRegister()` function
+in `StudentPortal`. If the admin has set the contest to `not_open` or
+`closed`, this shows a popup with the admin-editable message instead of
+navigating — so the gating logic only needs to be enforced in one place.
+
+**Session persistence:** once a student registers, their registration is
+cached in `localStorage` (`sosg_student_session`) so refreshing the page or
+coming back later doesn't lose their spot. This is purely a device-local
+convenience — the source of truth is the registration record on the server.
+
+**Image handling:** before upload, `api.js` resizes large photos client-side
+(longest edge capped at 2200px, re-encoded as JPEG) so a full-resolution
+phone photo doesn't fail on upload size limits. If resizing fails for any
+reason, the original file is uploaded unchanged.
+
+---
+
+## Admin dashboard
+
+Reached via the "🔒 Organizer portal" switch at the top of the page, gated
+by a single shared password (`ADMIN_PASS`, currently `sos!grande2027`,
+hardcoded near the top of `App.jsx`). There's no per-user login — it's one
+password for anyone on the SOS Grande team.
+
+Four tabs, all inside `AdminPanel`:
+
+- **Submissions** — search/filter by status, expand a row to see the full
+  statement and an inline artwork preview, change status
+  (new/reviewed/shortlisted/rejected), download the original artwork file,
+  export the filtered list to CSV, or delete a submission entirely (see
+  below). Deleting a submission also resets that student's `hasSubmitted`
+  flag, so they're able to submit again rather than being permanently
+  locked out.
+- **Registrations** — read-only list of everyone who's signed up, with CSV
+  export.
+- **Edit content** — a form for every piece of editable contest copy
+  (hero text, dates, prize, theme, rules, contact info), with its own
+  independent EN/ES toggle so an organizer can edit both language versions
+  regardless of which language they're currently browsing the site in.
+  Saving writes the whole `woc_content` object back in one call.
+- **Settings** — contest status control (Open / Not open yet / Submissions
+  closed, plus the bilingual message shown to students when it isn't open)
+  and the "danger zone" wipe tool.
+
+**Deleting a single submission** requires re-entering the admin password in
+a confirmation modal, even though the dashboard itself is already
+password-gated — this is a deliberate second checkpoint against accidental
+clicks, mirroring the pattern already used for the full data wipe. The
+password check happens server-side in `delete-submission.js`, not just in
+the UI.
+
+**Wiping test data** (Settings tab) permanently deletes *all* submissions
+and registrations (and their artwork files) in one action. It requires the
+admin password plus typing `DELETE` to confirm, and never touches contest
+content or the contest status setting. Useful for clearing out test entries
+right before the real contest opens.
+
+---
+
+## Translations & content
+
+All interface strings live in `src/i18n.js` under `UI.en` / `UI.es`, looked
+up via the `t(key)` function from `useLang()` (see `LangContext.jsx`).
+Editable contest content (as opposed to fixed interface labels) is a
+separate object — `DEFAULT_CONTENT` in the same file — since it's meant to
+be changed by organizers through the admin UI, not by editing code.
+
+To add a new piece of UI text: add the key to both `UI.en` and `UI.es`, then
+reference it with `t("your_key")`. To add a new piece of admin-editable
+content: add a field to both `DEFAULT_CONTENT_EN` and `DEFAULT_CONTENT_ES`,
+then add a corresponding input to `ContentEditor` in `App.jsx`.
+
+The current language is stored in `localStorage` (`LangContext.jsx`) and
+defaults to the browser's language if it's Spanish, English otherwise.
+
+---
 
 ## Local development
 
@@ -99,14 +171,40 @@ netlify deploy --prod
 npm install
 netlify dev
 ```
-`netlify dev` (not plain `vite dev`) is important — it runs the Netlify
-Functions locally alongside the Vite dev server so storage/upload/download
-work the same way they will in production.
 
-## To note before launch
+Use `netlify dev`, not plain `vite dev` — it runs the Netlify Functions
+locally alongside the Vite dev server, so registration, submission, file
+upload/download, and the admin actions all work exactly as they will in
+production. Plain `vite dev` will load the UI but every backend call will
+fail.
 
-- **Admin password** is currently hardcoded as `sos!grande2027` in `App.jsx`
-  (`ADMIN_PASS`) and mirrored in `netlify/functions/wipe.js`. 
-- **Data reset**: use the "Settings" tab in the organizer dashboard to wipe
-  all test submissions/registrations (and their artwork files) before the
-  real contest opens — no need to touch the Netlify dashboard directly.
+## Deploying
+
+The app is designed for Netlify (Netlify Blobs, used for all storage, is a
+Netlify-specific feature — porting to another host would mean swapping the
+storage layer in `netlify/functions/`).
+
+Simplest path: connect this repo to Netlify (**Add new site → Import an
+existing project**). Netlify reads `netlify.toml` automatically:
+- Build command: `npm run build`
+- Publish directory: `dist`
+- Functions directory: `netlify/functions`
+
+No environment variables are required — Netlify Blobs works out of the box
+on any Netlify site that has functions enabled.
+
+## Things worth knowing before handing this off
+
+- **The admin password is hardcoded**, not an environment variable. It
+  appears in three places and must be changed in all of them together:
+  `ADMIN_PASS` in `src/App.jsx`, and the same constant in
+  `netlify/functions/wipe.js` and `netlify/functions/delete-submission.js`.
+- **There's no per-admin login or audit log** — anyone with the password has
+  full access to every destructive action (status changes, deletions, wipe).
+  This is intentional for a small, trusted organizing team, but wouldn't
+  scale to a larger or less trusted group without adding real auth.
+- **All destructive server-side actions re-check the password themselves**
+  (delete-submission, wipe) rather than trusting the client — so the admin
+  UI being password-gated isn't the only thing standing between a stray
+  request and data loss.
+```
