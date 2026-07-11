@@ -1,4 +1,4 @@
-```markdown
+[README.md](https://github.com/user-attachments/files/29911903/README.md)
 # Waves of Change — SOS Grande contest app
 
 A bilingual (English/Spanish) web app for running SOS Grande's "Waves of
@@ -207,4 +207,3 @@ on any Netlify site that has functions enabled.
   (delete-submission, wipe) rather than trusting the client — so the admin
   UI being password-gated isn't the only thing standing between a stray
   request and data loss.
-```
